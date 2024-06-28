@@ -34,17 +34,14 @@ impl User {
             },
         }
     }
+    pub fn get_user_name(&self) -> String {
+        return self.username.to_string();
+    }
 }
 
 impl Default for User {
     fn default() -> Self {
         Self::new("root", true, true, true)
-    }
-}
-
-impl User {
-    pub fn get_user_name(&self) -> String {
-        return self.username.to_string();
     }
 }
 
