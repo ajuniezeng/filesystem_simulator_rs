@@ -6,14 +6,13 @@ use super::filesystem::FileSystem;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Stdio {
-    input_buffer: Vec<u8>,
     output_buffer: Vec<u8>,
     error_buffer: Vec<u8>,
 }
 
 impl Stdio {
     pub fn new() -> Self {
-        Stdio { input_buffer: Vec::new(), output_buffer: Vec::new(), error_buffer: Vec::new() }
+        Stdio { output_buffer: Vec::new(), error_buffer: Vec::new() }
     
     }
 
