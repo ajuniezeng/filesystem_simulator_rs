@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::user::User;
 
+use super::stdio::Stdio;
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum FileType {
     File,
@@ -40,6 +42,7 @@ pub struct FileSystem {
     pub current_path: String,
     current_user: User,
     free_list: VecDeque<u64>,
+    stdio: Stdio,
 }
 
 impl FileSystem {
@@ -50,6 +53,7 @@ impl FileSystem {
             current_path: "/".to_string(),
             current_user: user.clone(),
             free_list: VecDeque::new(),
+            stdio: Stdio::new(),
         };
 
         // Create the root directory
@@ -72,7 +76,19 @@ impl FileSystem {
         if name.starts_with("/") {
             name.to_string()
         } else {
-            format!("{}/{}", self.current_path, name)
+            if self.current_path == "/" {
+                format!("/{}", name)
+            } else {
+                format!("{}/{}", self.current_path, name)
+            }
+        }
+    }
+
+    fn extract_parent_paths(path: &str) -> String {
+        let path = Path::new(path);
+        match path.parent() {
+            Some(parent) => parent.to_str().unwrap_or("").to_string(),
+            None => "".to_string(),
         }
     }
 
@@ -92,10 +108,18 @@ impl FileSystem {
             ));
         }
 
-        let parent_path = if let FileType::Directory = file_type {
-            Some(self.current_path.clone())
+        let parent_path = if name.starts_with("/") {
+            Some(FileSystem::extract_parent_paths(name))
         } else {
-            None
+            if self.current_path == "/" {
+                Some(format!("/{}", FileSystem::extract_parent_paths(name)))
+            } else {
+                Some(format!(
+                    "{}/{}",
+                    self.current_path,
+                    FileSystem::extract_parent_paths(name)
+                ))
+            }
         };
 
         let entry = FileEntry {
@@ -110,33 +134,33 @@ impl FileSystem {
 
         self.files.insert(full_path.clone(), entry);
 
-        if let FileType::Directory = file_type {
-            self.files.insert(
-                format!("{}/.", full_path.clone()),
-                FileEntry {
-                    name: ".".to_string(),
-                    file_type: FileType::Directory,
-                    permission: permission.clone(),
-                    owned_user: Some(user.to_string()),
-                    size: 0,
-                    pages: Vec::new(),
-                    parent: Some(full_path.clone()),
-                },
-            );
+        // if let FileType::Directory = file_type {
+        //     self.files.insert(
+        //         format!("{}/.", full_path.clone()),
+        //         FileEntry {
+        //             name: ".".to_string(),
+        //             file_type: FileType::Directory,
+        //             permission: permission.clone(),
+        //             owned_user: Some(user.to_string()),
+        //             size: 0,
+        //             pages: Vec::new(),
+        //             parent: Some(full_path.clone()),
+        //         },
+        //     );
 
-            self.files.insert(
-                format!("{}/..", full_path),
-                FileEntry {
-                    name: "..".to_string(),
-                    file_type: FileType::Directory,
-                    permission,
-                    owned_user: Some(user.to_string()),
-                    size: 0,
-                    pages: Vec::new(),
-                    parent: parent_path,
-                },
-            );
-        }
+        //     self.files.insert(
+        //         format!("{}/..", full_path),
+        //         FileEntry {
+        //             name: "..".to_string(),
+        //             file_type: FileType::Directory,
+        //             permission,
+        //             owned_user: Some(user.to_string()),
+        //             size: 0,
+        //             pages: Vec::new(),
+        //             parent: parent_path,
+        //         },
+        //     );
+        // }
 
         Ok(())
     }
@@ -166,21 +190,27 @@ impl FileSystem {
         let page_size = 1024;
 
         let entry = self.files.get(&full_path);
+        let entry_owned_user = entry.unwrap().owned_user.clone();
 
-        if self.current_user.get_user_name() != "root"
-            && <std::option::Option<std::string::String> as Clone>::clone(
-                &entry.unwrap().owned_user,
-            )
-            .unwrap()
-                != self.current_user.get_user_name()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "Permission denied",
-            ));
+        if self.current_user.get_user_name() != "root" {
+            // Check if the entry_owned_user is not None and unwrap safely
+            if let Some(owned_user) = entry_owned_user {
+                if owned_user != self.current_user.get_user_name() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Permission denied",
+                    ));
+                }
+            } else {
+                // Handle the case where no user is set as the owner, if necessary
+                // This could be an error or a warning depending on your design
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "No owner set for this file/directory",
+                ));
+            }
         }
 
-        // Extract information from the entry before mutable operations
         if let Some(entry) = self.files.get(&full_path) {
             let mut pages = entry.pages.clone();
             let mut size = entry.size;
@@ -209,7 +239,6 @@ impl FileSystem {
                 data_written += write_size as usize;
             }
 
-            // Now we can mutate the entry safely
             if let Some(entry) = self.files.get_mut(&full_path) {
                 entry.pages = pages;
                 entry.size = size;
@@ -253,12 +282,23 @@ impl FileSystem {
         }
     }
 
-    pub fn ls(&self) {
+    pub fn ls(&mut self) {
         for (name, entry) in &self.files {
             if entry.parent.as_deref() == Some(&self.current_path) {
-                println!("{:?} {}", entry.file_type, name);
+                let suffix = match entry.file_type {
+                    FileType::Directory => "/",
+                    FileType::File => "",
+                };
+                let color = match entry.file_type {
+                    FileType::Directory => "\x1b[34m",
+                    FileType::File => "\x1b[33m", // yellow
+                };
+                let white = "\x1b[0m";
+                self.stdio
+                    .write(format!("{}{:?}{} {}{}\n", color, entry.file_type, white, name, suffix).as_bytes());
             }
         }
+        self.stdio.print();
     }
 
     pub fn cd(&mut self, path: &str) -> std::io::Result<()> {
@@ -315,15 +355,15 @@ impl FileSystem {
         )
     }
 
-    pub fn _cat(&self, name: &str, path: &str) {
-        match self.read_file(name, path) {
-            Ok(data) => match String::from_utf8(data) {
-                Ok(content) => println!("{}", content),
-                Err(e) => eprintln!("Error converting file content to string: {}", e),
-            },
-            Err(e) => eprintln!("Error reading file {}: {}", name, e),
-        }
-    }
+    // pub fn _cat(&self, name: &str, path: &str) {
+    //     match self.read_file(name, path) {
+    //         Ok(data) => match String::from_utf8(data) {
+    //             Ok(content) => println!("{}", content),
+    //             Err(e) => eprintln!("Error converting file content to string: {}", e),
+    //         },
+    //         Err(e) => eprintln!("Error reading file {}: {}", name, e),
+    //     }
+    // }
 
     pub fn rm(&mut self, name: &str) -> std::io::Result<()> {
         let full_path = self.get_full_path(name);
@@ -369,7 +409,7 @@ impl FileSystem {
         path: P,
     ) -> std::io::Result<()> {
         let src_full_path = self.get_full_path(src_name);
-        let _dest_full_path = self.get_full_path(dest_name);
+        // Get the parent path of the destination file from the full path
 
         let (data, user, permissions) = {
             if let Some(src_entry) = self.files.get(&src_full_path) {
@@ -395,20 +435,13 @@ impl FileSystem {
         Ok(())
     }
 
-    pub fn mv(&mut self, old_name: &str, new_name: &str) -> std::io::Result<()> {
-        let old_full_path = self.get_full_path(old_name);
-        let new_full_path = self.get_full_path(new_name);
+    pub fn mv<P: AsRef<Path>>(&mut self, src_name: &str, dest_name: &str, path: P) -> std::io::Result<()> {
+        self.cp(src_name, dest_name, path)?;
+        self.rm(src_name)
+    }
 
-        if let Some(mut entry) = self.files.remove(&old_full_path) {
-            entry.name = new_full_path.clone();
-            self.files.insert(new_full_path, entry);
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "File not found",
-            ))
-        }
+    pub fn is_file_exists(&self, name: &str) -> bool {
+        self.files.contains_key(&self.get_full_path(name))
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
@@ -417,9 +450,10 @@ impl FileSystem {
         Ok(())
     }
 
-    pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P, user: User) -> std::io::Result<Self> {
         let file = File::open(path)?;
-        let fs: FileSystem = serde_json::from_reader(file)?;
+        let mut fs: FileSystem = serde_json::from_reader(file)?;
+        fs.current_user = user;
         Ok(fs)
     }
 }

@@ -5,7 +5,7 @@ mod fs;
 mod sh;
 mod user;
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let matches = Command::new("Linux Filesystem Simulator")
         .version("0.1.0")
         .author("AjunieZeng <ajuniezeng@gmail.com>")
@@ -25,6 +25,7 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(&"root".to_string())
         .to_string();
     
-    Shell::init(user)?;
-    Ok(())
+    if let Err(e) = Shell::init(user) {
+        eprintln!("{}", e);
+    } 
 }
