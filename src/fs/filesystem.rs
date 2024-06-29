@@ -113,12 +113,14 @@ impl FileSystem {
         } else {
             if self.current_path == "/" {
                 Some(format!("/{}", FileSystem::extract_parent_paths(name)))
-            } else {
+            } else if name.contains("/") {
                 Some(format!(
                     "{}/{}",
                     self.current_path,
                     FileSystem::extract_parent_paths(name)
                 ))
+            } else {
+                Some(self.current_path.clone())
             }
         };
 
